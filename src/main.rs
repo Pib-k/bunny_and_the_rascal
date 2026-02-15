@@ -101,21 +101,53 @@ fn move_players(
 
         let pos_x = transform.translation.x + move_delta.x;
         let pos_y = transform.translation.y + move_delta.y;
+
         let player_size = sprite.custom_size.unwrap_or(Vec2 { x: 50.0, y: 50.0 });
         let player_half_size = player_size / 2.0;
-        let player_bounding = Aabb2d::new(Vec2 { x: pos_x, y: pos_y }, player_half_size);
-        let mut collided = false;
+
+        let player_bounding_x = Aabb2d::new(
+            Vec2 {
+                x: pos_x,
+                y: transform.translation.y,
+            },
+            player_half_size,
+        );
+
+        let mut collided_x = false;
+
+        let player_bounding_y = Aabb2d::new(
+            Vec2 {
+                x: transform.translation.x,
+                y: pos_y,
+            },
+            player_half_size,
+        );
+
+        let mut collided_y = false;
+
         for (transfrom_wall, sprite_wall) in query_wall {
             let wall_size = sprite_wall.custom_size.unwrap() / 2.0;
             let wall_bounding = Aabb2d::new(transfrom_wall.translation.truncate(), wall_size);
 
-            if wall_bounding.intersects(&player_bounding) {
-                collided = true;
+            if wall_bounding.intersects(&player_bounding_x) {
+                collided_x = true;
                 break;
             }
         }
-        if !collided {
+        for (transfrom_wall, sprite_wall) in query_wall {
+            let wall_size = sprite_wall.custom_size.unwrap() / 2.0;
+            let wall_bounding = Aabb2d::new(transfrom_wall.translation.truncate(), wall_size);
+
+            if wall_bounding.intersects(&player_bounding_y) {
+                collided_y = true;
+                break;
+            }
+        }
+
+        if !collided_x {
             transform.translation.x = pos_x;
+        }
+        if !collided_y {
             transform.translation.y = pos_y;
         }
     }
