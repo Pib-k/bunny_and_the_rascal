@@ -1,15 +1,22 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::math::bounding::{Aabb2d, IntersectsVolume};
 use bevy::prelude::*;
+use bevy::math::*;
+use bevy::sprite::Anchor;
 
 mod components;
 use crate::components::*;
 
-const PLAYER_SPEED: f32 = 400.0;
+const MOVE_THRESHHOLD: f32 = 0.1;
+const PLAYER_SPEED: f32 = 500.0;
+const GRAVITY: f32 = 2000.0;
+const JUMP_SPEED: f32 = 800.0;
+const MAX_FALL_SPEED: f32 = 1200.0;
+
 fn main() {
-    let background = Color::srgb(0.7, 0.2, 0.1);
+    let background = Color::srgb(0.0, 0.2, 0.1);
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .insert_resource(ClearColor(background))
         .insert_resource(FpsTimer(Timer::from_seconds(3.0, TimerMode::Repeating)))
@@ -17,66 +24,114 @@ fn main() {
         .add_systems(Startup, setup_fps_text)
         .add_systems(Startup, spawn_walls)
         .add_systems(Update, update_fps_text)
-        .add_systems(Update, move_players)
+        .add_systems(Update, velocity_system)
+        .add_systems(Update, player_input)
+        .add_systems(Update, gravity_system)
+        .add_systems(Update, animate_sprite)
+        .add_systems(Update, sprite_direction)
+        .add_systems(Update, move_state)
         .run();
 }
 
 
-fn spawn_players(mut commands: Commands) {
+
+// Spawn Bunny and Rascal, load sprite sheets
+fn spawn_players(mut commands: Commands, asset_server: Res<AssetServer>, mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>) {
     commands.spawn(Camera2d::default());
 
+    let texture = asset_server.load("bunny_sheet.png");
+    let layout = TextureAtlasLayout::from_grid(UVec2::splat(32), 7, 1, None, None);
+    let texture_atlas_layout = texture_atlas_layouts.add(layout);
+    let animation_indices = AnimationIndices{ first: 0, last: 6 };
+
+
+    // Spawn Bunny
     commands.spawn((
         Sprite {
-            color: Color::srgb(0.2, 0.5, 1.0), 
-            custom_size: Some(Vec2::new(50.0, 50.0)),
+            image: texture,
+            texture_atlas: Some(TextureAtlas {
+                layout: texture_atlas_layout,
+                index: animation_indices.first, // Start at the first frame
+            }),
             ..default()
         },
-        Transform::from_xyz(-300.0, 0.0, 0.0),
+        Anchor::BOTTOM_CENTER,
         Player { id: 1 },
+        Transform::from_xyz(-300.0, 0.0, 0.0).with_scale(Vec3::splat(3.0)),
+        Velocity(Vec2::ZERO),
+        MoveState::IDLE,
+        GravityScale(1.0),
+        Grounded(false),
+        Hitbox(Vec2::new(18.0, 24.0)),
+        animation_indices,
+        AnimationTimer(Timer::from_seconds(0.05, TimerMode::Repeating))
     ));
 
+    // Spawn Rascal, currently a red square
     commands.spawn((
         Sprite {
             color: Color::srgb(1.0, 0.3, 0.3),
             custom_size: Some(Vec2::new(50.0, 50.0)),
             ..default()
         },
+        Anchor::BOTTOM_CENTER,
         Transform::from_xyz(300.0, 0.0, 0.0),
         Player { id: 2 },
+        MoveState::IDLE,
+        Velocity(Vec2::ZERO),
+        GravityScale(1.0),
+        Grounded(false),
+        Hitbox(Vec2::new(50.0, 50.0))
     ));
 }
 
-fn move_players(
-    keyboard_input: Res<ButtonInput<KeyCode>>, 
+fn player_input(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut query: Query<(&mut Velocity, &mut Grounded, &Player)>) {
+
+        // Bunny can move with wasd, rascal with arrow keys 
+        for (mut velocity, mut grounded, player) in &mut query {
+
+            velocity.0.x = 0.0;
+
+            if player.id == 1 {
+            if keyboard_input.pressed(KeyCode::KeyA) { velocity.0.x = -PLAYER_SPEED; }
+            if keyboard_input.pressed(KeyCode::KeyD) { velocity.0.x = PLAYER_SPEED; }
+            if grounded.0 && keyboard_input.pressed(KeyCode::KeyW) { velocity.0.y = JUMP_SPEED; grounded.0 = false;  }
+        }
+
+            if player.id == 2 {
+            if keyboard_input.pressed(KeyCode::ArrowLeft) { velocity.0.x = -PLAYER_SPEED; }
+            if keyboard_input.pressed(KeyCode::ArrowRight) { velocity.0.x = PLAYER_SPEED; }
+            if grounded.0 && keyboard_input.pressed(KeyCode::ArrowUp) { velocity.0.y = JUMP_SPEED; grounded.0 = false; }
+        }
+    }
+}
+
+fn velocity_system(
     time: Res<Time>,                                  
-    mut query: Query<(&mut Transform, &Player, &Sprite)>, 
+    mut query: Query<(&mut Transform, &mut Velocity, &mut Grounded, &Player, &Hitbox, Option<&Anchor>)>, 
     query_wall: Query<(&Transform, &Sprite), (With<Wall>, Without<Player>)>,
 ) {
-    for (mut transform, player, sprite) in &mut query {
-        let mut direction = Vec2::ZERO;
+    for (mut transform, mut velocity, mut grounded, _player, hitbox, anchor) in &mut query {
 
-        if player.id == 1 {
-            if keyboard_input.pressed(KeyCode::KeyW) { direction.y += 1.0; }
-            if keyboard_input.pressed(KeyCode::KeyS) { direction.y -= 1.0; }
-            if keyboard_input.pressed(KeyCode::KeyA) { direction.x -= 1.0; }
-            if keyboard_input.pressed(KeyCode::KeyD) { direction.x += 1.0; }
-        }
+        grounded.0 = false;
 
-        if player.id == 2 {
-            if keyboard_input.pressed(KeyCode::ArrowUp) { direction.y += 1.0; }
-            if keyboard_input.pressed(KeyCode::ArrowDown) { direction.y -= 1.0; }
-            if keyboard_input.pressed(KeyCode::ArrowLeft) { direction.x -= 1.0; }
-            if keyboard_input.pressed(KeyCode::ArrowRight) { direction.x += 1.0; }
-        }
-
-        let move_delta = direction.normalize_or_zero() * PLAYER_SPEED * time.delta_secs();
+        let move_delta = velocity.0 * time.delta_secs();
 
         let mut pos_x = transform.translation.x + move_delta.x;
         let mut pos_y = transform.translation.y + move_delta.y;
 
-        let player_size = sprite.custom_size.unwrap_or(Vec2 { x: 50.0, y: 50.0 });
+        let mut player_size = Some(hitbox.0).unwrap_or(Vec2 { x: 32.0, y: 50.0 });
+        player_size.x *= transform.scale.x;
+        player_size.y *= transform.scale.y;
         let player_half_size = player_size / 2.0;
         let epsilon = 0.05;
+        
+        let mut center_offset_y = 0.0;
+        if let Some(&Anchor::BOTTOM_CENTER) = anchor {
+            center_offset_y = player_half_size.y; 
+        }
 
         let mut player_half_size_x = player_half_size;
         player_half_size_x.y -= epsilon;
@@ -85,7 +140,7 @@ fn move_players(
         let player_bounding_x = Aabb2d::new(
             Vec2 {
                 x: pos_x,
-                y: transform.translation.y,
+                y: transform.translation.y + center_offset_y,
             },
             player_half_size_x,
         );
@@ -111,7 +166,7 @@ fn move_players(
         let player_bounding_y = Aabb2d::new(
             Vec2 {
                 x: pos_x,
-                y: pos_y,
+                y: pos_y + center_offset_y,
             },
             player_half_size_y,
         );
@@ -122,16 +177,60 @@ fn move_players(
 
             if wall_bounding.intersects(&player_bounding_y) {
                 if move_delta.y > 0.0 {
-                    pos_y = transform_wall.translation.y - wall_size.y - player_half_size.y;
+                    velocity.0.y = 0.0;
+                    pos_y = transform_wall.translation.y - wall_size.y - player_half_size.y - center_offset_y;
                 }
                 else if move_delta.y < 0.0 {
-                    pos_y = transform_wall.translation.y + wall_size.y + player_half_size.y;
+                    grounded.0 = true;
+                    velocity.0.y = 0.0;
+                    pos_y = transform_wall.translation.y + wall_size.y + player_half_size.y - center_offset_y;
+                    break;
                 }
             }
         }
-        
+
         transform.translation.x = pos_x;
         transform.translation.y = pos_y;
+    }
+}
+
+// Sprite facing left or right based on velocity.
+fn sprite_direction(    
+    mut query: Query<(&Velocity, &mut Sprite)>) {
+    for (velocity, mut sprite) in &mut query {
+        if velocity.0.x < -MOVE_THRESHHOLD {
+            sprite.flip_x = true;
+        }
+        if velocity.0.x > 0.0 {
+            sprite.flip_x = false;
+        }
+    }
+}
+
+// Update move state (IDLE, RUNNING, JUMPING)
+fn move_state(mut query: Query<(&Velocity, &mut MoveState, &Grounded)>) {
+    for (velocity, mut move_state, grounded) in &mut query {
+
+        if grounded.0 == false {
+            *move_state = MoveState::JUMPING;
+        }
+        else if velocity.0.x.abs() > MOVE_THRESHHOLD {
+            *move_state = MoveState::RUNNING;
+        }
+        else {
+            *move_state = MoveState::IDLE;
+        }
+    }
+}
+
+
+// Apply gravity to anything with a GravityScale and Velocity
+fn gravity_system(
+    time: Res<Time>,
+    mut query: Query<(&mut Velocity, &GravityScale)>
+) {
+    for (mut velocity, gravity_scale) in &mut query {
+        velocity.0.y = f32::max(-MAX_FALL_SPEED, velocity.0.y - GRAVITY * gravity_scale.0 * time.delta_secs());
     }
 }
 
@@ -153,6 +252,8 @@ fn setup_fps_text(mut commands: Commands) {
     ));
 }
 
+
+// FPS Debugging
 fn update_fps_text(
     time: Res<Time>,
     diagnostics: Res<DiagnosticsStore>,
@@ -173,13 +274,56 @@ fn update_fps_text(
 }
 
 fn spawn_walls(mut commands: Commands) {
+    // commands.spawn((
+    //     Sprite {
+    //         color: Color::srgb(0.5, 0.5, 0.5),
+    //         custom_size: Some(Vec2::new(200.0, 30.0)),
+    //         ..default()
+    //     },
+    //     Transform::from_xyz(0.0, 0.0, 200.0),
+    //     Wall,
+    // ));
+
+    // Test Floor
     commands.spawn((
         Sprite {
             color: Color::srgb(0.5, 0.5, 0.5),
-            custom_size: Some(Vec2::new(200.0, 30.0)),
+            custom_size: Some(Vec2::new(1000.0, 30.0)),
             ..default()
         },
-        Transform::from_xyz(0.0, 0.0, 200.0),
+        Transform::from_xyz(0.0, -100.0, 200.0),
         Wall,
     ));
+
+}
+
+fn animate_sprite(
+    time: Res<Time>,
+    mut query: Query<(&AnimationIndices, &mut AnimationTimer, &mut Sprite, &MoveState, &Grounded)>
+) {
+    for (indices, mut timer, mut sprite, move_state, grounded) in &mut query {
+        
+        if *move_state == MoveState::RUNNING && grounded.0 {
+            timer.tick(time.delta());
+
+            if timer.just_finished() {
+                if let Some(atlas) = &mut sprite.texture_atlas {
+                    atlas.index = if atlas.index == indices.last {
+                        indices.first + 1
+                    } else {
+                        atlas.index + 1
+                    };
+                }
+            }
+        }
+        else if *move_state == MoveState::JUMPING && !grounded.0 { // Currently just the idle sprite
+                if let Some(atlas) = &mut sprite.texture_atlas {
+                atlas.index = indices.first;
+            }
+        } else if *move_state == MoveState::IDLE { // Reset to standing sprite
+            if let Some(atlas) = &mut sprite.texture_atlas {
+                atlas.index = indices.first;
+            }
+        }
+    }
 }
