@@ -24,6 +24,9 @@ pub struct GravityScale(pub f32); // Gravity scale for entities
 pub struct Grounded(pub bool); // Check whether an entity is grounded
 
 #[derive(Component)]
+pub struct DoubleJumping(pub bool); // Check whether an entity is double jumping
+
+#[derive(Component)]
 pub struct Hitbox(pub Vec2); // Hitbox of entities
 
 #[derive(Component, PartialEq)]
