@@ -1,9 +1,9 @@
+use crate::components::*;
 use bevy::app::*;
 use bevy::ecs::system::Commands;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::time::Timer;
-use crate::components::*;
 
 pub struct ProjectilePlugin;
 
@@ -18,9 +18,7 @@ pub struct Projectile {
 
 fn rascal_shoot(
     mut commands: Commands,
-    keyboard_input: Res<ButtonInput<KeyCode>>
-    query: Query<(&Transform, &Player, &Sprite)>
-    )
-{
-    
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    query: Query<(&Transform, &Player, &Sprite)>,
+) {
 }
