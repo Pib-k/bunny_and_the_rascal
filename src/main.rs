@@ -51,7 +51,7 @@ fn spawn_players(mut commands: Commands, asset_server: Res<AssetServer>, mut tex
             image: texture,
             texture_atlas: Some(TextureAtlas {
                 layout: texture_atlas_layout,
-                index: animation_indices.first, // Start at the first frame
+                index: animation_indices.first,
             }),
             ..default()
         },
@@ -64,7 +64,8 @@ fn spawn_players(mut commands: Commands, asset_server: Res<AssetServer>, mut tex
         Grounded(false),
         Hitbox(Vec2::new(18.0, 24.0)),
         animation_indices,
-        AnimationTimer(Timer::from_seconds(0.05, TimerMode::Repeating))
+        AnimationTimer(Timer::from_seconds(0.05, TimerMode::Repeating)),
+        DoubleJumping(false),
     ));
 
     // Spawn Rascal, currently a red square
@@ -81,23 +82,37 @@ fn spawn_players(mut commands: Commands, asset_server: Res<AssetServer>, mut tex
         Velocity(Vec2::ZERO),
         GravityScale(1.0),
         Grounded(false),
-        Hitbox(Vec2::new(50.0, 50.0))
+        Hitbox(Vec2::new(50.0, 50.0)),
+        DoubleJumping(false),
     ));
 }
 
 fn player_input(
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut query: Query<(&mut Velocity, &mut Grounded, &Player)>) {
+    mut query: Query<(&mut Velocity, &mut Grounded, &Player, &mut DoubleJumping)>) {
 
         // Bunny can move with wasd, rascal with arrow keys 
-        for (mut velocity, mut grounded, player) in &mut query {
+        for (mut velocity, mut grounded, player, mut double_jumping) in &mut query {
 
             velocity.0.x = 0.0;
 
             if player.id == 1 {
             if keyboard_input.pressed(KeyCode::KeyA) { velocity.0.x = -PLAYER_SPEED; }
             if keyboard_input.pressed(KeyCode::KeyD) { velocity.0.x = PLAYER_SPEED; }
-            if grounded.0 && keyboard_input.pressed(KeyCode::KeyW) { velocity.0.y = JUMP_SPEED; grounded.0 = false;  }
+            if keyboard_input.just_pressed(KeyCode::KeyW) { 
+
+                if !grounded.0 && double_jumping.0 {
+                    continue;
+                }
+                else if !grounded.0 && !double_jumping.0 {
+                    velocity.0.y = JUMP_SPEED;
+                    double_jumping.0 = true;
+                }
+                else {
+                    velocity.0.y = JUMP_SPEED; 
+                    grounded.0 = false;
+                }
+                }
         }
 
             if player.id == 2 {
@@ -110,10 +125,10 @@ fn player_input(
 
 fn velocity_system(
     time: Res<Time>,                                  
-    mut query: Query<(&mut Transform, &mut Velocity, &mut Grounded, &Player, &Hitbox, Option<&Anchor>)>, 
+    mut query: Query<(&mut Transform, &mut Velocity, &mut Grounded, &mut DoubleJumping, &Player, &Hitbox, Option<&Anchor>)>, 
     query_wall: Query<(&Transform, &Sprite), (With<Wall>, Without<Player>)>,
 ) {
-    for (mut transform, mut velocity, mut grounded, _player, hitbox, anchor) in &mut query {
+    for (mut transform, mut velocity, mut grounded, mut double_jumping, _player, hitbox, anchor) in &mut query {
 
         grounded.0 = false;
 
@@ -182,6 +197,7 @@ fn velocity_system(
                 }
                 else if move_delta.y < 0.0 {
                     grounded.0 = true;
+                    double_jumping.0 = false;
                     velocity.0.y = 0.0;
                     pos_y = transform_wall.translation.y + wall_size.y + player_half_size.y - center_offset_y;
                     break;
