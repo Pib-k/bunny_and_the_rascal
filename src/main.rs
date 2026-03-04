@@ -5,10 +5,8 @@ use bevy::math::bounding::{Aabb2d, IntersectsVolume};
 use bevy::math::*;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
-
 mod components;
 use crate::components::*;
-
 const MOVE_THRESHHOLD: f32 = 0.1;
 const PLAYER_SPEED: f32 = 500.0;
 const GRAVITY: f32 = 2000.0;
@@ -23,16 +21,23 @@ fn main() {
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .insert_resource(ClearColor(background))
         .insert_resource(FpsTimer(Timer::from_seconds(3.0, TimerMode::Repeating)))
+        .add_systems(Startup, spawn_walls)
         .add_systems(Startup, spawn_players)
         .add_systems(Startup, setup_fps_text)
-        .add_systems(Startup, spawn_walls)
         .add_systems(Update, update_fps_text)
-        .add_systems(Update, velocity_system)
-        .add_systems(Update, player_input)
-        .add_systems(Update, gravity_system)
-        .add_systems(Update, animate_sprite)
-        .add_systems(Update, sprite_direction)
-        .add_systems(Update, move_state)
+        .add_systems(
+            Update,
+            (
+                velocity_system,
+                player_input,
+                gravity_system,
+                animate_sprite,
+                sprite_direction,
+                move_state,
+            )
+                .chain(),
+        )
+        .add_systems(Update, despawn_entities.after(velocity_system))
         .run();
 }
 
@@ -157,21 +162,24 @@ fn velocity_system(
         let mut pos_x = transform.translation.x + move_delta.x;
         let mut pos_y = transform.translation.y + move_delta.y;
 
+        // Need to apply the correct scale/size to the Aabb2d
         let mut player_size = Some(hitbox.0).unwrap_or(Vec2 { x: 32.0, y: 50.0 });
         player_size.x *= transform.scale.x;
         player_size.y *= transform.scale.y;
+
         let player_half_size = player_size / 2.0;
         let epsilon = 0.05;
 
+        // If anchor bottom center we need to calculate the center of the Aabb2d.
         let mut center_offset_y = 0.0;
         if let Some(&Anchor::BOTTOM_CENTER) = anchor {
             center_offset_y = player_half_size.y;
         }
 
+        // --- X AXIS ---
         let mut player_half_size_x = player_half_size;
         player_half_size_x.y -= epsilon;
 
-        // --- X AXIS ---
         let player_bounding_x = Aabb2d::new(
             Vec2 {
                 x: pos_x,
@@ -193,10 +201,10 @@ fn velocity_system(
             }
         }
 
+        // --- Y AXIS ---
         let mut player_half_size_y = player_half_size;
         player_half_size_y.x -= epsilon;
 
-        // --- Y AXIS ---
         let player_bounding_y = Aabb2d::new(
             Vec2 {
                 x: pos_x,
@@ -306,15 +314,15 @@ fn update_fps_text(
 }
 
 fn spawn_walls(mut commands: Commands) {
-    // commands.spawn((
-    //     Sprite {
-    //         color: Color::srgb(0.5, 0.5, 0.5),
-    //         custom_size: Some(Vec2::new(200.0, 30.0)),
-    //         ..default()
-    //     },
-    //     Transform::from_xyz(0.0, 0.0, 200.0),
-    //     Wall,
-    // ));
+    commands.spawn((
+        Sprite {
+            color: Color::srgb(0.5, 0.5, 0.5),
+            custom_size: Some(Vec2::new(200.0, 30.0)),
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, 200.0),
+        Wall,
+    ));
 
     // Test Floor
     commands.spawn((
@@ -341,7 +349,6 @@ fn animate_sprite(
     for (indices, mut timer, mut sprite, move_state, grounded) in &mut query {
         if *move_state == MoveState::RUNNING && grounded.0 {
             timer.tick(time.delta());
-
             if timer.just_finished() {
                 if let Some(atlas) = &mut sprite.texture_atlas {
                     atlas.index = if atlas.index == indices.last {
@@ -361,6 +368,16 @@ fn animate_sprite(
             if let Some(atlas) = &mut sprite.texture_atlas {
                 atlas.index = indices.first;
             }
+        }
+    }
+}
+
+fn despawn_entities(mut commands: Commands, mut query: Query<Entity, With<DespawnEntity>>) {
+    for entity in &mut query {
+        if let Ok(mut entity_cmds) = commands.get_entity(entity) {
+            entity_cmds.despawn();
+        } else {
+            dbg!("Entity Already Gone");
         }
     }
 }
