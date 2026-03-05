@@ -5,24 +5,28 @@ use bevy::math::bounding::{Aabb2d, IntersectsVolume};
 use bevy::math::*;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
+use bevy_ecs_ldtk::prelude::*;
 mod components;
 use crate::components::*;
+
 const MOVE_THRESHHOLD: f32 = 0.1;
-const PLAYER_SPEED: f32 = 500.0;
-const GRAVITY: f32 = 2000.0;
-const JUMP_SPEED: f32 = 800.0;
-const MAX_FALL_SPEED: f32 = 1200.0;
+const PLAYER_SPEED: f32 = 250.0;
+const GRAVITY: f32 = 1000.0;
+const JUMP_SPEED: f32 = 400.0;
+const MAX_FALL_SPEED: f32 = 600.0;
 
 fn main() {
     let background = Color::srgb(0.0, 0.2, 0.1);
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         .add_plugins(ProjectilePlugin)
+        .add_plugins(LdtkPlugin)
+        .register_ldtk_entity::<PlayerBundle>("Bunny")
+        .register_ldtk_int_cell::<WallBundle>(1)
         .add_plugins(FrameTimeDiagnosticsPlugin::default())
         .insert_resource(ClearColor(background))
         .insert_resource(FpsTimer(Timer::from_seconds(3.0, TimerMode::Repeating)))
-        .add_systems(Startup, spawn_walls)
-        .add_systems(Startup, spawn_players)
+        .add_systems(Startup, setup)
         .add_systems(Startup, setup_fps_text)
         .add_systems(Update, update_fps_text)
         .add_systems(
@@ -34,6 +38,8 @@ fn main() {
                 animate_sprite,
                 sprite_direction,
                 move_state,
+                spawn_wall_collision,
+                initialize_players,
             )
                 .chain(),
         )
@@ -41,59 +47,44 @@ fn main() {
         .run();
 }
 
-// Spawn Bunny and Rascal, load sprite sheets
-fn spawn_players(
+fn initialize_players(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
+    mut query: Query<(Entity, &mut Transform, &Player), Added<Player>>,
 ) {
-    commands.spawn(Camera2d::default());
+    for (entity, mut transform, player) in &mut query {
+        if player.id == 2 {
+            continue;
+        }
 
-    let texture = asset_server.load("bunny_sheet.png");
-    let layout = TextureAtlasLayout::from_grid(UVec2::splat(32), 7, 1, None, None);
-    let texture_atlas_layout = texture_atlas_layouts.add(layout);
-    let animation_indices = AnimationIndices { first: 0, last: 6 };
+        let texture = asset_server.load("bunny_sheet.png");
+        let layout = TextureAtlasLayout::from_grid(UVec2::splat(32), 7, 1, None, None);
+        let texture_atlas_layout = texture_atlas_layouts.add(layout);
+        let animation_indices = AnimationIndices { first: 0, last: 6 };
 
-    // Spawn Bunny
-    commands.spawn((
-        Sprite {
-            image: texture,
-            texture_atlas: Some(TextureAtlas {
-                layout: texture_atlas_layout,
-                index: animation_indices.first,
-            }),
-            ..default()
-        },
-        Anchor::BOTTOM_CENTER,
-        Player { id: 1 },
-        Transform::from_xyz(-300.0, 0.0, 0.0).with_scale(Vec3::splat(3.0)),
-        Velocity(Vec2::ZERO),
-        MoveState::IDLE,
-        GravityScale(1.0),
-        Grounded(false),
-        Hitbox(Vec2::new(18.0, 24.0)),
-        animation_indices,
-        AnimationTimer(Timer::from_seconds(0.05, TimerMode::Repeating)),
-        DoubleJumping(false),
-    ));
-
-    // Spawn Rascal, currently a red square
-    commands.spawn((
-        Sprite {
-            color: Color::srgb(1.0, 0.3, 0.3),
-            custom_size: Some(Vec2::new(50.0, 50.0)),
-            ..default()
-        },
-        Anchor::BOTTOM_CENTER,
-        Transform::from_xyz(300.0, 0.0, 0.0),
-        Player { id: 2 },
-        MoveState::IDLE,
-        Velocity(Vec2::ZERO),
-        GravityScale(1.0),
-        Grounded(false),
-        Hitbox(Vec2::new(50.0, 50.0)),
-        DoubleJumping(false),
-    ));
+        transform.translation.z = 100.0;
+        commands.entity(entity).insert((
+            Sprite {
+                image: texture,
+                texture_atlas: Some(TextureAtlas {
+                    layout: texture_atlas_layout,
+                    index: animation_indices.first,
+                }),
+                ..default()
+            },
+            Player { id: 1 },
+            Anchor::BOTTOM_CENTER,
+            Velocity(Vec2::ZERO),
+            MoveState::IDLE,
+            GravityScale(1.0),
+            Grounded(false),
+            Hitbox(Vec2::new(18.0, 24.0)),
+            animation_indices,
+            AnimationTimer(Timer::from_seconds(0.05, TimerMode::Repeating)),
+            DoubleJumping(false),
+        ));
+    }
 }
 
 fn player_input(
@@ -143,6 +134,7 @@ fn velocity_system(
     time: Res<Time>,
     mut query: Query<(
         &mut Transform,
+        &GlobalTransform,
         &mut Velocity,
         &mut Grounded,
         &mut DoubleJumping,
@@ -150,17 +142,26 @@ fn velocity_system(
         &Hitbox,
         Option<&Anchor>,
     )>,
-    query_wall: Query<(&Transform, &Sprite), (With<Wall>, Without<Player>)>,
+    query_wall: Query<&Transform, (With<Wall>, Without<Player>)>,
 ) {
-    for (mut transform, mut velocity, mut grounded, mut double_jumping, _player, hitbox, anchor) in
-        &mut query
+    for (
+        mut transform,
+        global_transform,
+        mut velocity,
+        mut grounded,
+        mut double_jumping,
+        _player,
+        hitbox,
+        anchor,
+    ) in &mut query
     {
         grounded.0 = false;
 
         let move_delta = velocity.0 * time.delta_secs();
 
-        let mut pos_x = transform.translation.x + move_delta.x;
-        let mut pos_y = transform.translation.y + move_delta.y;
+        let global_pos = global_transform.translation().truncate();
+        let mut global_pos_x = global_pos.x + move_delta.x;
+        let mut global_pos_y = global_pos.y + move_delta.y;
 
         // Need to apply the correct scale/size to the Aabb2d
         let mut player_size = Some(hitbox.0).unwrap_or(Vec2 { x: 32.0, y: 50.0 });
@@ -168,6 +169,7 @@ fn velocity_system(
         player_size.y *= transform.scale.y;
 
         let player_half_size = player_size / 2.0;
+        let wall_half_size = Vec2::splat(16.0);
         let epsilon = 0.05;
 
         // If anchor bottom center we need to calculate the center of the Aabb2d.
@@ -182,21 +184,23 @@ fn velocity_system(
 
         let player_bounding_x = Aabb2d::new(
             Vec2 {
-                x: pos_x,
+                x: global_pos_x,
                 y: transform.translation.y + center_offset_y,
             },
             player_half_size_x,
         );
 
-        for (transform_wall, sprite_wall) in &query_wall {
-            let wall_size = sprite_wall.custom_size.unwrap() / 2.0;
-            let wall_bounding = Aabb2d::new(transform_wall.translation.truncate(), wall_size);
+        for global_wall in &query_wall {
+            let wall_center = global_wall.translation.truncate();
+            let wall_bounding = Aabb2d::new(wall_center, wall_half_size);
 
             if wall_bounding.intersects(&player_bounding_x) {
                 if move_delta.x > 0.0 {
-                    pos_x = transform_wall.translation.x - wall_size.x - player_half_size.x;
+                    global_pos_x =
+                        global_wall.translation.x - wall_half_size.x - player_half_size.x;
                 } else if move_delta.x < 0.0 {
-                    pos_x = transform_wall.translation.x + wall_size.x + player_half_size.x;
+                    global_pos_x =
+                        global_wall.translation.x + wall_half_size.x + player_half_size.x;
                 }
             }
         }
@@ -207,36 +211,37 @@ fn velocity_system(
 
         let player_bounding_y = Aabb2d::new(
             Vec2 {
-                x: pos_x,
-                y: pos_y + center_offset_y,
+                x: global_pos_x,
+                y: global_pos_y + center_offset_y,
             },
             player_half_size_y,
         );
 
-        for (transform_wall, sprite_wall) in &query_wall {
-            let wall_size = sprite_wall.custom_size.unwrap() / 2.0;
-            let wall_bounding = Aabb2d::new(transform_wall.translation.truncate(), wall_size);
+        for global_wall in &query_wall {
+            let wall_center = global_wall.translation.truncate();
+            let wall_bounding = Aabb2d::new(wall_center, wall_half_size);
 
             if wall_bounding.intersects(&player_bounding_y) {
                 if move_delta.y > 0.0 {
                     velocity.0.y = 0.0;
-                    pos_y = transform_wall.translation.y
-                        - wall_size.y
+                    global_pos_y = global_wall.translation.y
+                        - wall_half_size.y
                         - player_half_size.y
                         - center_offset_y;
                 } else if move_delta.y < 0.0 {
                     grounded.0 = true;
                     double_jumping.0 = false;
                     velocity.0.y = 0.0;
-                    pos_y = transform_wall.translation.y + wall_size.y + player_half_size.y
-                        - center_offset_y;
+                    global_pos_y =
+                        global_wall.translation.y + wall_half_size.y + player_half_size.y
+                            - center_offset_y;
                     break;
                 }
             }
         }
 
-        transform.translation.x = pos_x;
-        transform.translation.y = pos_y;
+        transform.translation.x = global_pos_x;
+        transform.translation.y = global_pos_y;
     }
 }
 
@@ -275,6 +280,41 @@ fn gravity_system(time: Res<Time>, mut query: Query<(&mut Velocity, &GravityScal
     }
 }
 
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn((
+        Camera2d::default(),
+        Projection::Orthographic(OrthographicProjection {
+            scale: 0.5,
+            ..OrthographicProjection::default_2d()
+        }),
+        Transform::from_xyz(288.0, 208.0, 0.0),
+    ));
+    let ldtk_world = LdtkWorldBundle {
+        ldtk_handle: asset_server.load("level1.ldtk").into(),
+        ..Default::default()
+    };
+
+    commands.spawn(ldtk_world);
+    commands.insert_resource(LevelSelection::index(0));
+
+    commands.spawn((
+        Sprite {
+            color: Color::srgb(1.0, 0.3, 0.3),
+            custom_size: Some(Vec2::new(50.0, 50.0)),
+            ..default()
+        },
+        Anchor::BOTTOM_CENTER,
+        Player { id: 2 },
+        Transform::from_xyz(300.0, 0.0, 100.0),
+        MoveState::IDLE,
+        Velocity(Vec2::ZERO),
+        GravityScale(1.0),
+        Grounded(false),
+        Hitbox(Vec2::new(50.0, 50.0)),
+        DoubleJumping(false),
+    ));
+}
+
 fn setup_fps_text(mut commands: Commands) {
     commands.spawn((
         Text::new("FPS: "),
@@ -311,29 +351,6 @@ fn update_fps_text(
             }
         }
     }
-}
-
-fn spawn_walls(mut commands: Commands) {
-    commands.spawn((
-        Sprite {
-            color: Color::srgb(0.5, 0.5, 0.5),
-            custom_size: Some(Vec2::new(200.0, 30.0)),
-            ..default()
-        },
-        Transform::from_xyz(0.0, 0.0, 200.0),
-        Wall,
-    ));
-
-    // Test Floor
-    commands.spawn((
-        Sprite {
-            color: Color::srgb(0.5, 0.5, 0.5),
-            custom_size: Some(Vec2::new(1000.0, 30.0)),
-            ..default()
-        },
-        Transform::from_xyz(0.0, -100.0, 200.0),
-        Wall,
-    ));
 }
 
 fn animate_sprite(
@@ -379,5 +396,18 @@ fn despawn_entities(mut commands: Commands, mut query: Query<Entity, With<Despaw
         } else {
             dbg!("Entity Already Gone");
         }
+    }
+}
+
+fn spawn_wall_collision(mut commands: Commands, query: Query<(Entity, &GridCoords), Added<Wall>>) {
+    for (entity, grid_coords) in &query {
+        commands.entity(entity).insert((
+            Transform::from_xyz(
+                grid_coords.x as f32 * 32.0 + 16.0,
+                grid_coords.y as f32 * 32.0 + 16.0,
+                0.0,
+            ),
+            GlobalTransform::default(),
+        ));
     }
 }

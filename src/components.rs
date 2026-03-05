@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_ecs_ldtk::prelude::*;
 
 #[derive(Component)]
 pub struct FpsText;
@@ -6,12 +7,22 @@ pub struct FpsText;
 #[derive(Resource)]
 pub struct FpsTimer(pub Timer);
 
-#[derive(Component)]
+#[derive(Default, Component)]
 pub struct Wall;
 
-#[derive(Component)]
+#[derive(Default, Component)]
 pub struct Player {
     pub id: u8,
+}
+
+#[derive(Default, Bundle, LdtkEntity)]
+pub struct PlayerBundle {
+    pub player: Player,
+}
+
+#[derive(Default, Bundle, LdtkIntCell)]
+pub struct WallBundle {
+    pub wall: Wall,
 }
 
 #[derive(Component)]
